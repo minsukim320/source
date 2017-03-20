@@ -1,0 +1,224 @@
+import tensorflow as tf
+import numpy as np
+from tensorflow.examples.tutorials.mnist import input_data
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import os
+
+config = tf.ConfigProto()#log_device_placement=True)
+config.gpu_options.per_process_gpu_memory_fraction = 0.45
+sess = tf.InteractiveSession("",config=config)
+
+training_epochs = 10000
+mb_size=16
+X_dim=784
+z_dim=300
+h_dim=128
+h1_dim=128
+h2_dim=256
+
+lr = 1e-3
+m= 5.0
+
+mnist=input_data.read_data_sets("./mnist/data/", one_hot=True)
+
+def plot(samples):
+	fig=plt.figure(figsize=(4,4))
+	gs=gridspec.GridSpec(4,4)
+	gs.update(wspace=0.05, hspace=0.05)
+	
+	for i, sample in enumerate(samples):
+		ax = plt.subplot(gs[i])
+		plt.axis('off')
+		ax.set_xticklabels([])
+		ax.set_yticklabels([])
+		ax.set_aspect('equal')
+		plt.imshow(sample.reshape(28,28), cmap='Greys_r')
+	return fig
+
+def xavier_init(size):
+	in_dim = size[0]
+	xavier_stddev = 1./ tf. sqrt(in_dim/2.)
+	return tf.random_normal(shape= size, stddev=xavier_stddev)
+
+def weight_variables(shape,stddev=0.02,name=None):
+	initial=tf.truncated_normal(shape,stddev=stddev)
+	return initial
+
+X=tf.placeholder(tf.float32, shape=[None, X_dim])
+z=tf.placeholder(tf.float32, shape=[None, z_dim])
+train_mode=tf.placeholder(tf.bool,name="train_mode")
+
+
+G_W1=tf.Variable(xavier_init([z_dim,7*7*256]))
+G_b1=tf.Variable(tf.zeros(shape=[7*7*256]))
+
+def batch_norm(x, n_out, phase_train):
+    """
+    Batch normalization on convolutional maps.
+    Ref.: http://stackoverflow.com/questions/33949786/how-could-i-use-batch-normalization-in-tensorflow
+    Args:
+        x:           Tensor, 4D BHWD input maps
+        n_out:       integer, depth of input maps
+        phase_train: boolean tf.Varialbe, true indicates training phase
+        scope:       string, variable scope
+    Return:
+        normed:      batch-normalized maps
+    """
+    with tf.variable_scope('bn'):
+        beta = tf.Variable(tf.constant(0.0, shape=[n_out]),
+                                     name='beta', trainable=True)
+        gamma = tf.Variable(tf.constant(1.0, shape=[n_out]),
+                                      name='gamma', trainable=True)
+        batch_mean, batch_var = tf.nn.moments(x, [0,1,2], name='moments')
+        ema = tf.train.ExponentialMovingAverage(decay=0.5)
+
+        def mean_var_with_update():
+            ema_apply_op = ema.apply([batch_mean, batch_var])
+            with tf.control_dependencies([ema_apply_op]):
+                return tf.identity(batch_mean), tf.identity(batch_var)
+
+        mean, var = tf.cond(phase_train,mean_var_with_update,
+                            lambda: (ema.average(batch_mean), ema.average(batch_var)))
+        normed = tf.nn.batch_normalization(x, mean, var, beta, gamma, 1e-3)
+    return normed
+
+def sample_z(m,n):
+	return np.random.uniform(-1.,1.,size=[m,n])
+
+def conv_relu(input, kernel_shape, bias_shape):
+	# Create variable named "conv_weights".
+	weights = tf.get_variable("conv_weights", kernel_shape,initializer=tf.random_normal_initializer())
+	# Create variable named "conv_biases".
+	biases = tf.get_variable("conv_biases", bias_shape,initializer=tf.constant_initializer(0.0))
+	conv = tf.nn.conv2d(input, weights,strides=[1,2,2,1], padding='SAME')
+	return tf.nn.relu(conv + biases)
+
+def deconv_relu(input,kernel_shape,bias_shape,deconv_shape):
+	#Create variable named "deconv_weights"
+	weights = tf.get_variable("deconv_weights",kernel_shape,initializer=tf.random_normal_initializer())
+	#Create variable named "deconv_biases"
+	biases = tf.get_variable("deconv_biases", bias_shape, initializer=tf.constant_initializer(0.0))
+	deconv=tf.nn.conv2d_transpose(input,weights,deconv_shape,strides=[1,2,2,1],padding='SAME')
+	return tf.nn.relu(deconv + biases)
+def deconv(input,kernel_shape,bias_shape,deconv_shape):
+        #Create variable named "deconv_weights"
+        weights = tf.get_variable("deconv_weights",kernel_shape,initializer=tf.random_normal_initializer())
+        #Create variable named "deconv_biases"
+        biases = tf.get_variable("deconv_biases", bias_shape, initializer=tf.constant_initializer(0.0))
+        deconv=tf.nn.conv2d_transpose(input,weights,deconv_shape,strides=[1,2,2,1],padding='SAME')
+        return tf.nn.relu(deconv + biases)
+
+def generator(z,train_mode):
+	with tf.variable_scope("G_fullconv1"):
+	        G_h1=tf.matmul(z,G_W1)+G_b1
+        	G_h1=tf.reshape(G_h1,[-1,7,7,256]) 
+		G_h1=tf.nn.relu(batch_norm(G_h1,256,train_mode))
+		
+	with tf.variable_scope("G_deconv1"):
+	        deconv_shape1=tf.pack([tf.shape(G_h1)[0],14,14,128])
+		h_deconv1=deconv(G_h1,[4,4,h1_dim,h2_dim],[h1_dim],deconv_shape1) 
+		h_deconv1=tf.nn.relu(batch_norm(h_deconv1,128,train_mode))
+
+        with tf.variable_scope("G_deconv2"):
+		deconv_shape2=tf.pack([tf.shape(h_deconv1)[0],28,28,1])
+		h_deconv2=deconv(h_deconv1,[4,4,1,h1_dim],[1],deconv_shape2)
+		#h_deconv2=tf.nn.relu(batch_norm(h_deconv1,1,train_mode))
+
+	return h_deconv2
+
+def discriminator(X):
+	X=tf.reshape(X,[-1,28,28,1])
+	#convolution
+	with tf.variable_scope("D_conv1"):
+		h_conv1=conv_relu(X,[4,4,1,h1_dim],[h_dim])
+
+	with tf.variable_scope("D_conv2"): 
+		h_conv2=conv_relu(h_conv1,[4,4,h1_dim,h2_dim],[h2_dim])
+
+	#deconvolution
+	with tf.variable_scope("D_deconv1"):
+		deconv_shape1=tf.pack([tf.shape(h_conv2)[0], 14, 14,h1_dim])
+		h_deconv1=deconv_relu(h_conv2,[4,4,h1_dim,h2_dim],[h1_dim],deconv_shape1)
+
+	with tf.variable_scope("D_deconv2"):
+	        deconv_shape2=tf.pack([tf.shape(h_deconv1)[0],28 ,28 ,1])
+		h_deconv2=deconv_relu(h_deconv1,[4,4,1,h1_dim],[h1_dim],deconv_shape2)
+
+	mse=tf.reduce_mean(tf.reduce_sum((X-h_deconv2)**2,1))
+	return mse
+
+
+
+
+G_sample=generator(z,train_mode)
+
+with tf.variable_scope("discriminator")as scope:
+	D_real=discriminator(X)
+	scope.reuse_variables()
+	D_fake=discriminator(G_sample)
+
+
+D_loss=D_real+tf.maximum(0.,m-D_fake)
+G_loss=D_fake
+#training value
+vars_to_train=tf.trainable_variables()
+vars_for_D_conv1=tf.get_collection(tf.GraphKeys.VARIABLES, scope="discriminator/D_conv1")
+vars_for_D_conv2=tf.get_collection(tf.GraphKeys.VARIABLES, scope="discriminator/D_conv2")
+
+vars_for_D_deconv1=tf.get_collection(tf.GraphKeys.VARIABLES, scope="discriminator/D_deconv1")
+vars_for_D_deconv2=tf.get_collection(tf.GraphKeys.VARIABLES, scope="discriminator/D_deconv2")
+
+theta_D1 =list(set(vars_to_train).union(set(vars_for_D_conv1)))
+theta_D2 =list(set(vars_to_train).union(set(vars_for_D_conv2)))
+theta_D3 =list(set(vars_to_train).union(set(vars_for_D_deconv1)))
+theta_D4 = list(set(vars_to_train).union(set(vars_for_D_deconv2)))
+theta_D=theta_D1+theta_D2+theta_D3+theta_D4
+
+vars_for_G_fully=tf.get_collection(tf.GraphKeys.VARIABLES, scope="G_fullconv1")
+vars_for_G_fully_bn=tf.get_collection(tf.GraphKeys.VARIABLES, scope="G_fullconv1/bn")
+
+vars_for_G_deconv1=tf.get_collection(tf.GraphKeys.VARIABLES, scope="G_deconv1")
+vars_for_G_deconv1_bn=tf.get_collection(tf.GraphKeys.VARIABLES, scope="G_deconv1/bn")
+
+vars_for_G_deconv2=tf.get_collection(tf.GraphKeys.VARIABLES, scope="G_deconv2")
+vars_for_G_deconv2_bn=tf.get_collection(tf.GraphKeys.VARIABLES, scope="G_deconv2/bn")
+
+theta_G1=list(set(vars_to_train).union(set(vars_for_G_fully)))
+theta_G2=list(set(vars_to_train).union(set(vars_for_G_deconv1)))
+theta_G3=list(set(vars_to_train).union(set(vars_for_G_deconv2)))
+theta_G1_bn=list(set(vars_to_train).union(set(vars_for_G_fully_bn)))
+theta_G2_bn=list(set(vars_to_train).union(set(vars_for_G_deconv1_bn)))
+theta_G3_bn=list(set(vars_to_train).union(set(vars_for_G_deconv2_bn)))
+
+theta_G=theta_G1+theta_G1_bn+theta_G2+theta_G2_bn+theta_G3+theta_G3_bn
+
+#train optimizer
+D_train=(tf.train.AdamOptimizer(learning_rate=lr).minimize(D_loss,var_list=theta_D))
+G_train=(tf.train.AdamOptimizer(learning_rate=lr).minimize(G_loss,var_list=theta_G))
+
+#start
+sess=tf.Session()
+sess.run(tf.initialize_all_variables(),feed_dict={train_mode:True})
+
+if not os.path.exists('out_batchnorm/'):
+	os.makedirs('out_batchnorm/')
+
+k=0
+for epoch in range(training_epochs):
+	total_batch=int(mnist.train.num_examples/mb_size)
+	
+	for i in range(total_batch):
+		X_mb,_ = mnist.train.next_batch(mb_size)
+        	z_mb = sample_z(mb_size,z_dim)
+	        _,D_loss_curr=sess.run([D_train,D_loss], feed_dict={X:X_mb, z:z_mb, train_mode:True})
+        	_,G_loss_curr=sess.run([G_train,G_loss], feed_dict={X:X_mb, z: sample_z(mb_size, z_dim),train_mode:True})
+	        if i % 100 == 0:
+       		        print('epoch = {}, D_loss = {:.4}, G_loss= {:.4}'.format(epoch,D_loss_curr,G_loss_curr))
+
+	        samples=sess.run(G_sample,feed_dict={z:sample_z(16,z_dim), train_mode:False})
+
+       		fig=plot(samples)
+	        plt.savefig('out_batchnorm/{}.png'.format(str(k).zfill(3)), bbox_inches='tight')
+		k+=1
+	        plt.close(fig)
