@@ -17,10 +17,12 @@ h_dim=128
 h1_dim=128
 h2_dim=256
 
-lr = 1e-3
-m= 5.0
+lr = 1e-5
+m= 20.0
 
 mnist=input_data.read_data_sets("./mnist/data/", one_hot=True)
+def lrelu(x,leak=0.2, name="lrelu"):
+	return tf.maximum(x,leak*x)
 
 def plot(samples):
 	fig=plt.figure(figsize=(4,4))
@@ -92,7 +94,7 @@ def conv_relu(input, kernel_shape, bias_shape):
 	# Create variable named "conv_biases".
 	biases = tf.get_variable("conv_biases", bias_shape,initializer=tf.constant_initializer(0.0))
 	conv = tf.nn.conv2d(input, weights,strides=[1,2,2,1], padding='SAME')
-	return tf.nn.relu(conv + biases)
+	return lrelu(conv + biases)
 
 def deconv_relu(input,kernel_shape,bias_shape,deconv_shape):
 	#Create variable named "deconv_weights"
@@ -100,30 +102,32 @@ def deconv_relu(input,kernel_shape,bias_shape,deconv_shape):
 	#Create variable named "deconv_biases"
 	biases = tf.get_variable("deconv_biases", bias_shape, initializer=tf.constant_initializer(0.0))
 	deconv=tf.nn.conv2d_transpose(input,weights,deconv_shape,strides=[1,2,2,1],padding='SAME')
-	return tf.nn.relu(deconv + biases)
+	return lrelu(deconv + biases)
+
 def deconv(input,kernel_shape,bias_shape,deconv_shape):
         #Create variable named "deconv_weights"
         weights = tf.get_variable("deconv_weights",kernel_shape,initializer=tf.random_normal_initializer())
         #Create variable named "deconv_biases"
         biases = tf.get_variable("deconv_biases", bias_shape, initializer=tf.constant_initializer(0.0))
         deconv=tf.nn.conv2d_transpose(input,weights,deconv_shape,strides=[1,2,2,1],padding='SAME')
-        return tf.nn.relu(deconv + biases)
+        return lrelu(deconv + biases)
 
 def generator(z,train_mode):
 	with tf.variable_scope("G_fullconv1"):
 	        G_h1=tf.matmul(z,G_W1)+G_b1
         	G_h1=tf.reshape(G_h1,[-1,7,7,256]) 
-		G_h1=tf.nn.relu(batch_norm(G_h1,256,train_mode))
+		G_h1=lrelu(batch_norm(G_h1,256,train_mode))
 		
 	with tf.variable_scope("G_deconv1"):
 	        deconv_shape1=tf.pack([tf.shape(G_h1)[0],14,14,128])
 		h_deconv1=deconv(G_h1,[4,4,h1_dim,h2_dim],[h1_dim],deconv_shape1) 
-		h_deconv1=tf.nn.relu(batch_norm(h_deconv1,128,train_mode))
+		h_deconv1=lrelu(batch_norm(h_deconv1,128,train_mode))
 
         with tf.variable_scope("G_deconv2"):
 		deconv_shape2=tf.pack([tf.shape(h_deconv1)[0],28,28,1])
 		h_deconv2=deconv(h_deconv1,[4,4,1,h1_dim],[1],deconv_shape2)
 		#h_deconv2=tf.nn.relu(batch_norm(h_deconv1,1,train_mode))
+		h_deconv2=tf.nn.tanh(h_deconv2)
 
 	return h_deconv2
 
@@ -213,7 +217,7 @@ for epoch in range(training_epochs):
         	z_mb = sample_z(mb_size,z_dim)
 	        _,D_loss_curr=sess.run([D_train,D_loss], feed_dict={X:X_mb, z:z_mb, train_mode:True})
         	_,G_loss_curr=sess.run([G_train,G_loss], feed_dict={X:X_mb, z: sample_z(mb_size, z_dim),train_mode:True})
-	        if i % 100 == 0:
+	        if i % 1000 == 0:
        		        print('epoch = {}, D_loss = {:.4}, G_loss= {:.4}'.format(epoch,D_loss_curr,G_loss_curr))
 
 	        samples=sess.run(G_sample,feed_dict={z:sample_z(16,z_dim), train_mode:False})
