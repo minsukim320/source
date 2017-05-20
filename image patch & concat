@@ -1,0 +1,101 @@
+import tensorflow as tf
+import numpy as np
+
+ 
+
+sess=tf.Session()
+
+sess.run(tf.global_variables_initializer())
+
+#217,181
+
+zero_mat=tf.constant(np.zeros([1,217,217,1],dtype=np.int32))
+
+#split0, split1, split2, split3 = tf.split(zero_mat, num_or_size_splits=4, axis=1)
+
+#split0,split1,split2,split3,split4,split5,split6 = tf.split(0,7,zero_mat)
+
+patch1=tf.extract_image_patches(zero_mat, [1,7,7,1],[1,7,7,1],[1,1,1,1], 'VALID')
+
+ 
+
+shape1=sess.run(tf.shape(patch1[0,:,:,0]))
+
+shape2=sess.run(tf.shape(patch1[0,:,:,1]))
+
+ 
+
+print(shape1)
+
+print(shape2)
+
+ 
+
+#concat1 = tf.concat(0,[patch1[0,:,:,0],patch1[0,:,:,1]])
+
+concat1 = patch1[0,:,:,0]
+concat2 = patch1[0,:,:,7]
+concat3 = patch1[0,:,:,14]
+concat4 = patch1[0,:,:,21]
+concat5 = patch1[0,:,:,28]
+concat6 = patch1[0,:,:,35]
+concat7 = patch1[0,:,:,42]
+
+ 
+
+ 
+
+for i in range(6):
+     concat1=tf.concat(0,[concat1,patch1[0,:,:,i+1]])
+
+for i in range(6):
+     concat2=tf.concat(0,[concat2,patch1[0,:,:,i+8]])
+
+for i in range(6): 
+     concat3 = tf.concat(0,[concat3,patch1[0,:,:,i+15]])
+
+for i in range(6):
+     concat4 = tf.concat(0,[concat4,patch1[0,:,:,i+22]])
+
+for i in range(6):
+     concat5 = tf.concat(0,[concat5,patch1[0,:,:,i+29]])
+
+for i in range(6):
+     concat6 = tf.concat(0,[concat6,patch1[0,:,:,i+36]])
+
+for i in range(6):
+     concat7 = tf.concat(0,[concat7,patch1[0,:,:,i+43]])
+
+ 
+
+### vertical ###
+
+final = concat1
+
+final = tf.concat(1,[final,concat2])
+
+final = tf.concat(1,[final,concat3])
+
+final = tf.concat(1,[final,concat4])
+
+final = tf.concat(1,[final,concat5])
+
+final = tf.concat(1,[final,concat6])
+
+final = tf.concat(1,[final,concat7])
+
+ 
+
+ 
+
+ 
+
+shape = sess.run(tf.shape(final))
+
+print(shape)
+
+#print("1: ",split0.shape)
+#print("2: ",split1.shape)
+#print("3: ",split2.shape)
+#print("4: ",split3.shape)
+
